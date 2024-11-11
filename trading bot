@@ -1,0 +1,117 @@
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+import yfinance as yf
+
+class StockTradingBot:
+    def __init__(self, symbol, initial_capital=10000):
+        self.symbol = symbol
+        self.capital = initial_capital
+        self.position = 0
+        self.trades = []
+        self.portfolio_value = []
+        
+    def fetch_data(self, period="6mo"):
+        """Fetch historical data for analysis"""
+        stock = yf.Ticker(self.symbol)
+        df = stock.history(period=period)
+        df['SMA20'] = df['Close'].rolling(window=20).mean()
+        df['SMA50'] = df['Close'].rolling(window=50).mean()
+        return df
+    
+    def generate_signals(self, df):
+        """Generate buy/sell signals based on SMA crossover"""
+        signals = pd.DataFrame(index=df.index)
+        signals['signal'] = 0
+        
+        # Buy signal: 20-day SMA crosses above 50-day SMA
+        signals.loc[df['SMA20'] > df['SMA50'], 'signal'] = 1
+        
+        # Sell signal: 20-day SMA crosses below 50-day SMA
+        signals.loc[df['SMA20'] < df['SMA50'], 'signal'] = -1
+        
+        return signals
+    
+    def execute_trade(self, price, signal):
+        """Execute trade based on signal"""
+        if signal == 1 and self.position == 0:  # Buy
+            shares = int(self.capital / price)
+            if shares > 0:
+                cost = shares * price
+                self.capital -= cost
+                self.position = shares
+                self.trades.append({
+                    'date': datetime.now(),
+                    'type': 'BUY',
+                    'shares': shares,
+                    'price': price,
+                    'total': cost
+                })
+                
+        elif signal == -1 and self.position > 0:  # Sell
+            proceeds = self.position * price
+            self.capital += proceeds
+            self.trades.append({
+                'date': datetime.now(),
+                'type': 'SELL',
+                'shares': self.position,
+                'price': price,
+                'total': proceeds
+            })
+            self.position = 0
+    
+    def run_backtest(self, data):
+        """Run backtest on historical data"""
+        self.capital = 10000  # Reset capital
+        self.position = 0
+        self.trades = []
+        
+        signals = self.generate_signals(data)
+        
+        for i in range(len(data)):
+            if i > 0:  # Skip first day
+                self.execute_trade(data['Close'].iloc[i], signals['signal'].iloc[i])
+            
+            # Calculate portfolio value
+            portfolio = self.capital + (self.position * data['Close'].iloc[i])
+            self.portfolio_value.append({
+                'date': data.index[i],
+                'value': portfolio
+            })
+    
+    def get_performance_metrics(self):
+        """Calculate and return performance metrics"""
+        if not self.portfolio_value:
+            return None
+            
+        initial_value = self.portfolio_value[0]['value']
+        final_value = self.portfolio_value[-1]['value']
+        returns = (final_value - initial_value) / initial_value * 100
+        
+        daily_returns = []
+        for i in range(1, len(self.portfolio_value)):
+            daily_return = (self.portfolio_value[i]['value'] - self.portfolio_value[i-1]['value']) / self.portfolio_value[i-1]['value']
+            daily_returns.append(daily_return)
+        
+        return {
+            'total_return': returns,
+            'sharpe_ratio': np.mean(daily_returns) / np.std(daily_returns) * np.sqrt(252),
+            'num_trades': len(self.trades),
+            'final_capital': self.capital + (self.position * self.trades[-1]['price'] if self.position > 0 else 0)
+        }
+
+def main():
+    # Example usage
+    bot = StockTradingBot('AAPL')
+    historical_data = bot.fetch_data()
+    bot.run_backtest(historical_data)
+    metrics = bot.get_performance_metrics()
+    
+    print(f"Performance Metrics:")
+    print(f"Total Return: {metrics['total_return']:.2f}%")
+    print(f"Sharpe Ratio: {metrics['sharpe_ratio']:.2f}")
+    print(f"Number of Trades: {metrics['num_trades']}")
+    print(f"Final Capital: ${metrics['final_capital']:.2f}")
+
+if __name__ == "__main__":
+    main()
