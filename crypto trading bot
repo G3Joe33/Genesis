@@ -1,0 +1,79 @@
+import ccxt
+import numpy as np
+import asyncio
+import websockets
+from collections import deque
+
+# Initialize the exchange with your API keys
+exchange = ccxt.binance({
+    'apiKey': 'YOUR_API_KEY',
+    'secret': 'YOUR_SECRET_KEY',
+    'enableRateLimit': True,
+    'options': {'defaultType': 'future'}  # For futures trading, adjust as necessary
+})
+
+# Global variables for real-time data
+symbol = 'BTC/USDT'
+timeframe = '1m'  # One minute candlestick data
+ohlcv_buffer = deque(maxlen=100)  # We'll keep the last 100 candles in memory
+short_period = 5
+long_period = 20
+
+# Function to calculate SMA
+def calculate_sma(data, period=20):
+    if len(data) < period:
+        return None
+    closes = [candle[-1] for candle in data]
+    return sum(closes[-period:]) / period
+
+# Function to handle incoming WebSocket messages
+async def handle_message(message):
+    if 'e' in message and message['e'] == 'kline':
+        kline = message['k']
+        if kline['x']:  # Candle is closed
+            candle = [
+                int(kline['t']),  # Open time
+                float(kline['o']),  # Open
+                float(kline['h']),  # High
+                float(kline['l']),  # Low
+                float(kline['c']),  # Close
+                float(kline['v'])   # Volume
+            ]
+            ohlcv_buffer.append(candle)
+            
+            # Check for trading signals
+            if len(ohlcv_buffer) >= max(short_period, long_period):
+                short_sma = calculate_sma(ohlcv_buffer, short_period)
+                long_sma = calculate_sma(ohlcv_buffer, long_period)
+                if short_sma and long_sma:
+                    if short_sma > long_sma:
+                        print("Signal: BUY")
+                        # Here you would place a buy order
+                    elif short_sma < long_sma:
+                        print("Signal: SELL")
+                        # Here you would place a sell order
+
+# WebSocket URL for Binance
+ws_url = f"wss://fstream.binance.com/ws/{symbol.lower()}@kline_{timeframe}"
+
+# Async function to run the WebSocket client
+async def run_websocket():
+    async with websockets.connect(ws_url) as websocket:
+        while True:
+            try:
+                message = await websocket.recv()
+                await handle_message(eval(message))  # Note: Using eval is not secure for production
+            except Exception as e:
+                print(f"WebSocket error: {e}")
+                break
+
+# Main function to run the bot
+def run_trading_bot():
+    try:
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(run_websocket())
+    except KeyboardInterrupt:
+        print("Bot stopped by user")
+
+if __name__ == "__main__":
+    run_trading_bot()
